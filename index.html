@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Scan Absensi Turbo</title>
+  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+
+  <style>
+    /* RESET & BASE */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+      background: #000;
+      overflow: hidden;
+      height: 100vh;
+      width: 100vw;
+      font-family: sans-serif;
+    }
+
+    /* CAMERA FULLSCREEN */
+    #reader {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+    }
+
+    #reader video {
+      object-fit: cover !important;
+      width: 100% !important;
+      height: 100% !important;
+    }
+
+    /* UI OVERLAY */
+    .overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 10;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    /* BOX SCANNER (Style Minimalist Professional) */
+    .scan-box {
+      position: relative;
+      width: 260px;
+      height: 260px;
+      /* Masking gelap di luar kotak */
+      box-shadow: 0 0 0 4000px rgba(0, 0, 0, 0.6);
+      border-radius: 24px;
+      border: 2px solid rgba(255, 255, 255, 0.4);
+      transition: transform 0.1s ease-out, border-color 0.1s ease;
+      will-change: transform, box-shadow;
+    }
+
+    /* Sudut Putih (Visual Only) */
+    .scan-box::before,
+    .scan-box::after {
+      content: '';
+      position: absolute;
+      width: 40px;
+      height: 40px;
+      border-color: #fff;
+      border-style: solid;
+      border-width: 4px;
+      pointer-events: none;
+    }
+
+    .scan-box::before {
+      top: -2px;
+      left: -2px;
+      border-right: 0;
+      border-bottom: 0;
+      border-radius: 20px 0 0 0;
+    }
+
+    .scan-box::after {
+      top: -2px;
+      right: -2px;
+      border-left: 0;
+      border-bottom: 0;
+      border-radius: 0 20px 0 0;
+    }
+
+    .box-bottom::before,
+    .box-bottom::after {
+      content: '';
+      position: absolute;
+      width: 40px;
+      height: 40px;
+      border-color: #fff;
+      border-style: solid;
+      border-width: 4px;
+      bottom: -2px;
+      pointer-events: none;
+    }
+
+    .box-bottom::before {
+      left: -2px;
+      border-right: 0;
+      border-top: 0;
+      border-radius: 0 0 0 20px;
+    }
+
+    .box-bottom::after {
+      right: -2px;
+      border-left: 0;
+      border-top: 0;
+      border-radius: 0 0 20px 0;
+    }
+
+    /* EFEK SUKSES (Snappy) */
+    .scan-box.success {
+      border-color: #4CAF50;
+      /* Efek flash putih instan lalu hilang */
+      animation: flashSuccess 0.3s ease-out forwards;
+    }
+
+    @keyframes flashSuccess {
+      0% {
+        box-shadow: 0 0 0 4000px rgba(0, 0, 0, 0.6), inset 0 0 0 20px rgba(255, 255, 255, 0.8);
+        transform: scale(1.02);
+      }
+
+      100% {
+        box-shadow: 0 0 0 4000px rgba(0, 0, 0, 0.8), inset 0 0 0 0px transparent;
+        transform: scale(1);
+      }
+    }
+
+    /* CHECKMARK (Muncul Cepat) */
+    .checkmark {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) scale(0.5);
+      width: 100px;
+      height: 100px;
+      opacity: 0;
+      fill: #4CAF50;
+      transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    }
+
+    .scan-box.success .checkmark {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1);
+    }
+
+    /* HIDE DEFAULT ELEMENTS */
+    #reader__scan_region {
+      display: none;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div id="reader"></div>
+
+  <div class="overlay">
+    <div class="scan-box" id="scanBox">
+      <div class="box-bottom"></div>
+      <svg class="checkmark" viewBox="0 0 24 24">
+        <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+      </svg>
+    </div>
+  </div>
+
+  <script>
+    // --- KONFIGURASI KECEPATAN ---
+    const SCAN_DELAY = 700; // Reset scanner dalam 0.7 detik (Sangat Cepat)
+
+    let isProcessing = false;
+    let lastCode = null;
+    let html5QrCode;
+
+    function onScanSuccess(decodedText, decodedResult) {
+      // Logic Gate: Cegah spam scan
+      if (isProcessing) return;
+      if (decodedText === lastCode) return;
+
+      // 1. LOCK & LOG
+      isProcessing = true;
+      lastCode = decodedText;
+
+      // 2. UI FEEDBACK (Instant)
+      const box = document.getElementById('scanBox');
+      box.classList.add('success');
+      if (navigator.vibrate) navigator.vibrate([30, 30, 30]); // Haptic: "trrt" pendek
+
+      // 3. NETWORK REQUEST (Silent Background)
+      try {
+        if (isValidURL(decodedText)) {
+          // Pakai keepalive untuk memastikan request terkirim meski UI sibuk
+          fetch(decodedText, {
+            method: 'GET',
+            mode: 'no-cors',
+            keepalive: true,
+            cache: 'no-cache'
+          }).catch(() => { });
+        }
+      } catch (e) { }
+
+      // 4. RESET (Cepat)
+      setTimeout(() => {
+        box.classList.remove('success');
+        isProcessing = false;
+        // lastCode = null; // Aktifkan ini jika ingin siswa yg sama bisa scan ulang
+      }, SCAN_DELAY);
+    }
+
+    function isValidURL(str) {
+      try { new URL(str); return true; } catch (_) { return false; }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      html5QrCode = new Html5Qrcode("reader");
+
+      // --- SETTING TURBO ---
+      const config = {
+        fps: 120, // Smooth & Stabil (Best Balance)
+        qrbox: { width: 250, height: 250 },
+        aspectRatio: 1.0,
+        disableFlip: true,
+        // OPTIMASI VITAL: Hanya baca QR (Ignore Barcode/EAN) -> Performance naik 2x lipat
+        formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE],
+        // OPTIMASI VITAL: Gunakan Native Android Detector (Hardware Accelerated)
+        experimentalFeatures: {
+          useBarCodeDetectorIfSupported: true
+        }
+      };
+
+      // Start Camera
+      html5QrCode.start(
+        { facingMode: "environment" },
+        config,
+        onScanSuccess
+      ).catch(err => {
+        console.error("Error start camera:", err);
+        alert("Kamera gagal dimulai. Pastikan izin kamera aktif & gunakan HTTPS.");
+      });
+    });
+  </script>
+</body>
+
+</html>
